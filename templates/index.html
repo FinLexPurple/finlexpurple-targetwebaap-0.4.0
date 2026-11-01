@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Home{% endblock %}
+{% block content %}
+<section class="hero">
+  <h1>FLP Demo Shop</h1>
+  <p class="lede">Subscriptions &amp; payment callbacks demo — a versioned, deliberately
+  vulnerable target for testing <strong>FinLexPurple 0.4.0</strong>.</p>
+</section>
+<section class="cards">
+  <a class="card" href="{{ url_for('checkout') }}"><h3>Checkout</h3><p>Buy the Pro plan for your team.</p></a>
+  <a class="card" href="{{ url_for('developers') }}"><h3>Developer / Integrations</h3><p>Payment callback URL and test events.</p></a>
+</section>
+{% endblock %}
