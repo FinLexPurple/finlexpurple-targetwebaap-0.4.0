@@ -1,0 +1,5 @@
+# Runtime / local artifacts
+.venv/
+__pycache__/
+*.pyc
+target.db
