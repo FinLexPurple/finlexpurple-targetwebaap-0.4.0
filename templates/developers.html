@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Developer / Integrations{% endblock %}
+{% block content %}
+<section class="panel">
+  <h2>Developer / Integrations</h2>
+  <p>Point your payment provider's event notifications at this callback URL
+  (<code>POST</code>, JSON body):</p>
+  <p><a href="{{ url_for('payment_webhook') }}"><code>{{ webhook_url }}</code></a></p>
+  <p class="muted">Order status is available at <code>/orders/&lt;order_id&gt;</code>.</p>
+
+  <h3>Send a test event</h3>
+  <form method="post" action="{{ url_for('payment_webhook') }}">
+    <label>Order id <input name="order_id" value="ord-1001"></label>
+    <label>Event <input name="event" value="payment_intent.succeeded"></label>
+    <label>Status <input name="status" value="pending"></label>
+    <button class="btn" type="submit">Send test event</button>
+  </form>
+</section>
+{% endblock %}
