@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Checkout{% endblock %}
+{% block content %}
+<section class="panel narrow">
+  <h2>Checkout</h2>
+  <dl class="kv">
+    <dt>Order</dt><dd><a href="{{ url_for('order_status', order_id=order['id']) }}">{{ order['id'] }}</a></dd>
+    <dt>Item</dt><dd>{{ product['name'] }}</dd>
+    <dt>List price</dt><dd>${{ product['list_price'] }}</dd>
+    <dt>Amount due</dt><dd id="amount-due">${{ order['amount'] }}</dd>
+  </dl>
+  {% if submitted %}
+    <p class="muted">Amount saved: <strong>{{ order['amount'] }}</strong></p>
+  {% endif %}
+  <form method="post" action="{{ url_for('checkout') }}">
+    <input type="hidden" name="sku" value="{{ product['sku'] }}">
+    <label>Amount (USD)
+      <input name="amount" value="{{ order['amount'] }}" readonly>
+    </label>
+    <button class="btn" type="submit">Place order</button>
+  </form>
+</section>
+{% endblock %}
