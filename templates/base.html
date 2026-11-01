@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}FLP Demo Shop{% endblock %} — FinLexPurple Target</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="warnbar">WARNING: DELIBERATELY VULNERABLE TEST TARGET — FinLexPurple 0.4.0 — localhost only, do not deploy</div>
+  <header class="topbar">
+    <a class="brand" href="{{ url_for('index') }}">FLP Demo Shop <span class="fict">(fictional)</span></a>
+    <nav>
+      <a href="{{ url_for('checkout') }}">Checkout</a>
+      <a href="{{ url_for('developers') }}">Developer / Integrations</a>
+    </nav>
+  </header>
+  <main class="wrap">
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="foot">
+    FLP Demo Shop is a fictional application built solely to test the
+    FinLexPurple&nbsp;0.4.0 security scanner. It contains intentional vulnerabilities.
+  </footer>
+</body>
+</html>
