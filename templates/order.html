@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Order {{ order['id'] }}{% endblock %}
+{% block content %}
+<section class="panel narrow">
+  <h2>Order status</h2>
+  <dl class="kv">
+    <dt>Order id</dt><dd id="order-id">{{ order['id'] }}</dd>
+    <dt>Status</dt><dd id="order-status">{{ order['status'] }}</dd>
+    <dt>Item</dt><dd>{{ order['sku'] }}</dd>
+    <dt>Amount</dt><dd>${{ order['amount'] }}</dd>
+  </dl>
+</section>
+{% endblock %}
