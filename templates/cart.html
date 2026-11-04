@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Cart — apply coupon{% endblock %}
+{% block content %}
+<section class="panel narrow">
+  <h2>Your cart</h2>
+  <dl class="kv">
+    <dt>Order id</dt><dd>{{ order['id'] }}</dd>
+    <dt>Item</dt><dd>{{ order['sku'] }}</dd>
+    <dt>Amount</dt><dd>${{ order['amount'] }}</dd>
+    <dt>Coupon</dt><dd>{{ order['coupon'] or 'none' }}</dd>
+  </dl>
+  <form method="post" action="/cart/coupon">
+    <label>Coupon code <input name="code" placeholder="enter a coupon code"></label>
+    <button type="submit">Apply coupon</button>
+  </form>
+  {% if applied %}<p class="note">Coupon applied to order {{ order['id'] }}.</p>{% endif %}
+</section>
+{% endblock %}
