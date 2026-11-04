@@ -86,7 +86,10 @@ Optional environment overrides (defaults keep it on localhost):
 | Table      | Row                                                          |
 |------------|--------------------------------------------------------------|
 | `products` | `FLP-PRO-12M` — "FLP Demo Pro plan (12 months)", list price `49.99` |
-| `orders`   | `ord-1001` — the demo cart, sku `FLP-PRO-12M`, amount `49.99`, status `pending` |
+| `orders`   | `ord-1001` — the demo cart (no owner), sku `FLP-PRO-12M`, amount `49.99`, status `pending` |
+| `orders`   | `ord-alice-0001` — owner `alice`, amount `49.99`, status `paid` (Scope 3) |
+| `orders`   | `ord-bob-0001` — owner `bob`, amount `49.99`, status `paid` (Scope 3) |
+| `users`    | `alice`, `bob` — the two seeded account logins (Scope 3) |
 
 `webhook_events` starts empty. No order `flp-webhook-probe-0001` exists until a
 callback creates it.
@@ -103,6 +106,7 @@ exposed as a real `<form>` whose `action` and input names the crawler can read.
 |-------|-------------------|------------------|-------------------|
 | **1 — Checkout** | `cashier` / `price_tampering` | **`VERIFIED`** | Root links to `/checkout`. The page has `<form method="post" action="/checkout">` with an input named exactly **`amount`** (plus `sku`). The server reads `amount` from the query string **or** the form body, **trusts it, and persists it** to order `ord-1001` without recomputing from the list price. Submitting `amount=0.01` reflects `0.01` in the response; a later **bare `GET /checkout`** (no params) still shows `0.01`. That bare-GET read-back is what the CLI's `charge_confirmer` reads. |
 | **2 — Payment webhook + order-status oracle** | `cashier` / `webhook_bypass` | **`VERIFIED`** (with the order-status read-back pointed at `/orders/flp-webhook-probe-0001`) | Root links to `/developers` ("Developer / Integrations"), which lists the callback URL `/payment/webhook` and a "Send a test event" `<form method="post" action="/payment/webhook">`. **`POST /payment/webhook`** does **not** validate `X-Signature`: the forged request below returns **HTTP 200** and the server **upserts** order `flp-webhook-probe-0001` with status `paid`. `GET /payment/webhook` returns **405** — the webhook never reflects order state. The **separate** read-back is **`GET /orders/<order_id>`**, which shows the order id and its status (404 without echoing the id when the order does not exist). |
+| **3 — Order IDOR (two sessions)** | `cashier` / `order_idor` | **`VERIFIED`** (with two sessions configured via `FLP_IDOR_IDENTITIES`) | Root links to `/login` (`<form method="post" action="/login">`, input `user` = `alice` or `bob`), which sets a signed-cookie session. **`GET /account/orders/<id>`** requires a session but performs **no per-object ownership check**, so Bob (logged in) reads Alice's `ord-alice-0001` and gets her **exact** object. The CLI verifies by reading the same id under both sessions: identical owner-view bytes ⇒ cross-account read reproduced. The owner-scoped **`GET /account/orders`** (lists only the caller's own ids) is the negative control — a client never sees another user's ids there. Anonymous access to `/account/orders/<id>` is `401`. |
 
 Forged request the CLI sends for scope 2 (match exactly):
 
@@ -128,7 +132,7 @@ and status `paid`.
 
 | Planned surface | CLI agent / class | Expected verdict | Purpose |
 |-----------------|-------------------|------------------|---------|
-| Web-class surface (reflected XSS or IDOR) | `hunter` / web class | to be set when built | So full delegation selects `[hunter, cashier]`. |
+| Reflected XSS web surface | `hunter` / web class | to be set when built | So full delegation selects `[hunter, cashier]`. (Order IDOR is now built as Scope 3 above, as the financial `order_idor` class.) |
 | `/graphql` stub | none (no specialist) | `CapabilityGap` surfaced | Demonstrates the selector reporting a capability gap. |
 | Secure checkout (server-recomputed price) | `cashier` / `price_tampering` | `NOT_REPRODUCED` / `INCONCLUSIVE` | Negative control: the tampered amount is rejected or not persisted. |
 | Secure webhook (signature-verified) | `cashier` / `webhook_bypass` | `NOT_REPRODUCED` | Negative control: the forged callback is rejected. |
@@ -158,10 +162,20 @@ curl -s -X POST http://127.0.0.1:5000/payment/webhook \
   -H 'X-Signature: invalid-not-a-real-hmac' \
   --data '{"amount": "0.00", "event": "payment_intent.succeeded", "order_id": "flp-webhook-probe-0001", "status": "paid"}'
 curl -s http://127.0.0.1:5000/orders/flp-webhook-probe-0001 | grep -E "order-id|order-status"
+
+# Scope 3 — order IDOR: Bob logs in and reads Alice's order (cross-account):
+curl -s -c alice.cookies -X POST http://127.0.0.1:5000/login -d 'user=alice' >/dev/null
+curl -s -c bob.cookies   -X POST http://127.0.0.1:5000/login -d 'user=bob'   >/dev/null
+curl -s -b alice.cookies http://127.0.0.1:5000/account/orders/ord-alice-0001   # owner view
+curl -s -b bob.cookies   http://127.0.0.1:5000/account/orders/ord-alice-0001   # IDOR: same bytes
+curl -s -b bob.cookies   http://127.0.0.1:5000/account/orders                  # owner-scoped: bob only
+curl -s http://127.0.0.1:5000/account/orders/ord-alice-0001                    # anon -> 401
 ```
 
 Expected: both checkout lines show `$0.01`; the webhook returns `"received": true`;
-the order page shows `flp-webhook-probe-0001` and `paid`.
+the order page shows `flp-webhook-probe-0001` and `paid`. For Scope 3, Bob's read of
+`ord-alice-0001` returns the **same** JSON as Alice's own view (the IDOR), while
+`GET /account/orders` lists only the caller's own ids and the anonymous read is `401`.
 
 ---
 
