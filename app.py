@@ -24,6 +24,7 @@ from flask import (
     jsonify,
     render_template,
     request,
+    session,
 )
 
 # --- Configuration ---------------------------------------------------------
@@ -65,6 +66,7 @@ def init_db():
         DROP TABLE IF EXISTS products;
         DROP TABLE IF EXISTS orders;
         DROP TABLE IF EXISTS webhook_events;
+        DROP TABLE IF EXISTS users;
 
         CREATE TABLE products (
             sku TEXT PRIMARY KEY,
@@ -76,7 +78,17 @@ def init_db():
             id TEXT PRIMARY KEY,
             sku TEXT NOT NULL,
             amount TEXT NOT NULL,
-            status TEXT NOT NULL
+            status TEXT NOT NULL,
+            -- Nullable: the public demo cart and webhook-created orders have no
+            -- owner; the per-user account orders (Scope 3) are owned by a user.
+            owner TEXT,
+            -- Scope 4 (coupon_abuse): the client-supplied coupon code applied to
+            -- the cart, trusted and persisted here; NULL until one is applied.
+            coupon TEXT
+        );
+
+        CREATE TABLE users (
+            username TEXT PRIMARY KEY
         );
 
         CREATE TABLE webhook_events (
@@ -97,11 +109,19 @@ def init_db():
         ],
     )
     db.executemany(
-        "INSERT INTO orders (id, sku, amount, status) VALUES (?,?,?,?)",
+        "INSERT INTO orders (id, sku, amount, status, owner) VALUES (?,?,?,?,?)",
         [
-            # The demo cart the checkout page reads and writes.
-            (CART_ORDER_ID, "FLP-PRO-12M", "49.99", "pending"),
+            # The demo cart the checkout page reads and writes (no owner).
+            (CART_ORDER_ID, "FLP-PRO-12M", "49.99", "pending", None),
+            # Scope 3 (order_idor): per-user account orders. Alice's order is
+            # readable by Bob through the planted missing per-object authz.
+            ("ord-alice-0001", "FLP-PRO-12M", "49.99", "paid", "alice"),
+            ("ord-bob-0001", "FLP-PRO-12M", "49.99", "paid", "bob"),
         ],
+    )
+    db.executemany(
+        "INSERT INTO users (username) VALUES (?)",
+        [("alice",), ("bob",)],
     )
     db.commit()
     db.close()
@@ -147,6 +167,28 @@ def checkout():
     order = get_order(CART_ORDER_ID)
     product = db.execute("SELECT * FROM products WHERE sku = ?", (order["sku"],)).fetchone()
     return render_template("checkout.html", order=order, product=product, submitted=submitted)
+
+
+@app.route("/cart/coupon", methods=["GET", "POST"])
+def cart_coupon():
+    # SCOPE 4 (coupon_abuse): a client-supplied coupon code is TRUSTED and applied
+    # to the cart order with NO validation that the code was ever issued — any
+    # code drops the total to 0.00 and is persisted. GET shows a real <form> so a
+    # crawler discovers POST /cart/coupon with input name 'code'. The durable
+    # effect is read back via the separate order-status oracle GET /orders/ord-1001.
+    db = get_db()
+    code = request.values.get("code")
+    applied = code is not None and code != ""
+    if applied:
+        db.execute(
+            "UPDATE orders SET coupon = ?, amount = ? WHERE id = ?",
+            (code, "0.00", CART_ORDER_ID),
+        )
+        db.commit()
+        if request.method == "POST":
+            return jsonify({"applied": True, "coupon": code, "order_id": CART_ORDER_ID}), 200
+    order = get_order(CART_ORDER_ID)
+    return render_template("cart.html", order=order, applied=applied)
 
 
 @app.route("/developers")
@@ -197,10 +239,71 @@ def order_status(order_id):
     # Separate order-status resource (the in-scope read-back oracle). Shows the
     # order id and its durable status. A missing order is a plain 404 that does
     # not echo the requested id, so the read-back cannot match on a miss.
+    # PUBLIC on purpose (Scopes 1-2 read it back without a session); this is NOT
+    # the Scope-3 IDOR surface, which is the authenticated /account/orders/<id>.
     order = get_order(order_id)
     if order is None:
         abort(404)
     return render_template("order.html", order=order)
+
+
+# --- Scope 3 (order_idor): authenticated account orders --------------------
+# Two seeded users (alice, bob). Logging in sets a signed-cookie session. The
+# per-user order resource below is addressable by id and, by design, performs NO
+# per-object ownership check — so a logged-in Bob can read Alice's order. The
+# order-list endpoint IS owner-scoped (the negative control), and is how a
+# legitimate client would discover only its own ids.
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        user = (request.values.get("user") or "").strip().lower()
+        if user not in ("alice", "bob"):
+            abort(401)
+        session["user"] = user
+        return jsonify({"logged_in_as": user})
+    # A real <form> so a crawler starting at / discovers the POST surface.
+    return (
+        "<!doctype html><title>Account login</title><h1>Account login</h1>"
+        "<form method='post' action='/login'>"
+        "<input name='user' placeholder='alice or bob'>"
+        "<button type='submit'>Log in</button></form>",
+        200,
+        {"Content-Type": "text/html; charset=utf-8"},
+    )
+
+
+@app.route("/logout", methods=["POST"])
+def logout():
+    session.pop("user", None)
+    return jsonify({"logged_out": True})
+
+
+@app.route("/account/orders")
+def account_orders():
+    # Negative control: owner-scoped. Returns ONLY the logged-in user's order
+    # ids — a legitimate client never sees another user's ids here.
+    user = session.get("user")
+    if not user:
+        abort(401)
+    rows = get_db().execute("SELECT id FROM orders WHERE owner = ?", (user,)).fetchall()
+    return jsonify({"user": user, "orders": [row["id"] for row in rows]})
+
+
+@app.route("/account/orders/<order_id>")
+def account_order(order_id):
+    # PLANTED IDOR (Scope 3): requires a session, but performs NO per-object
+    # ownership check — any authenticated user may read ANY order by id. The
+    # response is deterministic per order (same bytes whoever reads it), so a
+    # cross-account read returns the owner's exact object.
+    if not session.get("user"):
+        abort(401)
+    order = get_order(order_id)
+    if order is None:
+        abort(404)
+    return jsonify({
+        "id": order["id"], "owner": order["owner"], "sku": order["sku"],
+        "amount": order["amount"], "status": order["status"],
+    })
 
 
 if __name__ == "__main__":
