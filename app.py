@@ -81,7 +81,10 @@ def init_db():
             status TEXT NOT NULL,
             -- Nullable: the public demo cart and webhook-created orders have no
             -- owner; the per-user account orders (Scope 3) are owned by a user.
-            owner TEXT
+            owner TEXT,
+            -- Scope 4 (coupon_abuse): the client-supplied coupon code applied to
+            -- the cart, trusted and persisted here; NULL until one is applied.
+            coupon TEXT
         );
 
         CREATE TABLE users (
@@ -164,6 +167,28 @@ def checkout():
     order = get_order(CART_ORDER_ID)
     product = db.execute("SELECT * FROM products WHERE sku = ?", (order["sku"],)).fetchone()
     return render_template("checkout.html", order=order, product=product, submitted=submitted)
+
+
+@app.route("/cart/coupon", methods=["GET", "POST"])
+def cart_coupon():
+    # SCOPE 4 (coupon_abuse): a client-supplied coupon code is TRUSTED and applied
+    # to the cart order with NO validation that the code was ever issued — any
+    # code drops the total to 0.00 and is persisted. GET shows a real <form> so a
+    # crawler discovers POST /cart/coupon with input name 'code'. The durable
+    # effect is read back via the separate order-status oracle GET /orders/ord-1001.
+    db = get_db()
+    code = request.values.get("code")
+    applied = code is not None and code != ""
+    if applied:
+        db.execute(
+            "UPDATE orders SET coupon = ?, amount = ? WHERE id = ?",
+            (code, "0.00", CART_ORDER_ID),
+        )
+        db.commit()
+        if request.method == "POST":
+            return jsonify({"applied": True, "coupon": code, "order_id": CART_ORDER_ID}), 200
+    order = get_order(CART_ORDER_ID)
+    return render_template("cart.html", order=order, applied=applied)
 
 
 @app.route("/developers")
