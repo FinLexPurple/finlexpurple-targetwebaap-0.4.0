@@ -117,6 +117,9 @@ def init_db():
             # readable by Bob through the planted missing per-object authz.
             ("ord-alice-0001", "FLP-PRO-12M", "49.99", "paid", "alice"),
             ("ord-bob-0001", "FLP-PRO-12M", "49.99", "paid", "bob"),
+            # Scope 5 (payment_status_trust): a dedicated order whose status the
+            # client can set directly (no settlement), separate from the cart.
+            ("ord-status-0001", "FLP-PRO-12M", "49.99", "pending", None),
         ],
     )
     db.executemany(
@@ -245,6 +248,29 @@ def order_status(order_id):
     if order is None:
         abort(404)
     return render_template("order.html", order=order)
+
+
+@app.route("/orders/<order_id>/status", methods=["GET", "POST"])
+def order_set_status(order_id):
+    # SCOPE 5 (payment_status_trust): the order's OWN status endpoint TRUSTS a
+    # client-supplied `status` and persists it to the order with NO settlement and
+    # no server-side check — so a client can mark an unpaid order `paid`. This is
+    # the app's own status parameter, distinct from the Scope-2 webhook callback.
+    # GET shows a real <form> so a crawler discovers POST /orders/<id>/status with
+    # input name `status`. The durable effect is read back via GET /orders/<id>.
+    db = get_db()
+    order = get_order(order_id)
+    if order is None:
+        abort(404)
+    status = request.values.get("status")
+    applied = status is not None and status != ""
+    if applied:
+        db.execute("UPDATE orders SET status = ? WHERE id = ?", (status, order_id))
+        db.commit()
+        if request.method == "POST":
+            return jsonify({"updated": True, "order_id": order_id, "status": status}), 200
+        order = get_order(order_id)
+    return render_template("status.html", order=order, applied=applied)
 
 
 # --- Scope 3 (order_idor): authenticated account orders --------------------
