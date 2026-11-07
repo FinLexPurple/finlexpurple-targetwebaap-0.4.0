@@ -10,6 +10,7 @@
   <a class="card" href="{{ url_for('checkout') }}"><h3>Checkout</h3><p>Buy the Pro plan for your team.</p></a>
   <a class="card" href="{{ url_for('cart_coupon') }}"><h3>Cart &amp; coupons</h3><p>Apply a coupon to your cart.</p></a>
   <a class="card" href="{{ url_for('order_set_status', order_id='ord-status-0001') }}"><h3>Order status</h3><p>Update the status of your order.</p></a>
+  <a class="card" href="{{ url_for('order_refund', order_id='ord-refund-0001') }}"><h3>Refunds</h3><p>Request a refund on your order.</p></a>
   <a class="card" href="{{ url_for('developers') }}"><h3>Developer / Integrations</h3><p>Payment callback URL and test events.</p></a>
 </section>
 {% endblock %}
