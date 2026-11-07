@@ -7,8 +7,14 @@
     <dt>Order id</dt><dd id="order-id">{{ order['id'] }}</dd>
     <dt>Status</dt><dd id="order-status">{{ order['status'] }}</dd>
     <dt>Item</dt><dd>{{ order['sku'] }}</dd>
-    <dt>Amount</dt><dd>${{ order['amount'] }}</dd>
+    <dt>Amount</dt>
+    <dd><span data-refund-amount="{{ order['amount'] }}">${{ order['amount'] }}</span></dd>
     <dt>Coupon</dt><dd id="order-coupon">{{ order['coupon'] or 'none' }}</dd>
+    {# Scope 6 (refund_abuse) read-back: the durable refunded total, exposed as a
+       machine-readable token so the in-scope confirmer can compare it against the
+       amount paid (refunded > amount == a durable over-refund). #}
+    <dt>Refunded</dt>
+    <dd><span data-refund-refunded="{{ order['refunded'] }}">${{ order['refunded'] }}</span></dd>
   </dl>
 </section>
 {% endblock %}
