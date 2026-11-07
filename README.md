@@ -90,6 +90,7 @@ Optional environment overrides (defaults keep it on localhost):
 | `orders`   | `ord-alice-0001` — owner `alice`, amount `49.99`, status `paid` (Scope 3) |
 | `orders`   | `ord-bob-0001` — owner `bob`, amount `49.99`, status `paid` (Scope 3) |
 | `orders`   | `ord-status-0001` — no owner, amount `49.99`, status `pending` (Scope 5) |
+| `orders`   | `ord-refund-0001` — no owner, amount `49.99`, status `paid`, refunded `0.00` (Scope 6) |
 | `users`    | `alice`, `bob` — the two seeded account logins (Scope 3) |
 
 `webhook_events` starts empty. No order `flp-webhook-probe-0001` exists until a
@@ -110,6 +111,7 @@ exposed as a real `<form>` whose `action` and input names the crawler can read.
 | **3 — Order IDOR (two sessions)** | `cashier` / `order_idor` | **`VERIFIED`** (with two sessions configured via `FLP_IDOR_IDENTITIES`) | Root links to `/login` (`<form method="post" action="/login">`, input `user` = `alice` or `bob`), which sets a signed-cookie session. **`GET /account/orders/<id>`** requires a session but performs **no per-object ownership check**, so Bob (logged in) reads Alice's `ord-alice-0001` and gets her **exact** object. The CLI verifies by reading the same id under both sessions: identical owner-view bytes ⇒ cross-account read reproduced. The owner-scoped **`GET /account/orders`** (lists only the caller's own ids) is the negative control — a client never sees another user's ids there. Anonymous access to `/account/orders/<id>` is `401`. |
 | **4 — Coupon abuse** | `cashier` / `coupon_abuse` | **`VERIFIED`** (with the order-status read-back pointed at `/orders/ord-1001`) | Root links to `/cart/coupon` (`<form method="post" action="/cart/coupon">`, input `code`). **`POST /cart/coupon`** **trusts any client-supplied coupon code** it never issued: it returns **HTTP 200**, drops the cart order `ord-1001` total to `0.00`, and **persists the code** on the order. The **separate** read-back is **`GET /orders/ord-1001`**, which shows the applied `coupon`. The CLI applies a distinctive bogus code behind the gate and verifies via that read-back: the bogus code recorded on the persisted order ⇒ illegitimate discount reproduced. Without the order-status read-back the verdict is `INCONCLUSIVE`, not `VERIFIED`. |
 | **5 — Payment-status trust** | `cashier` / `payment_status_trust` | **`VERIFIED`** (with the order-status read-back pointed at `/orders/ord-status-0001`) | Root links to `/orders/ord-status-0001/status` (`<form method="post" action="/orders/ord-status-0001/status">`, input `status`). **`POST /orders/<id>/status`** **trusts a client-supplied `status`** and persists it to the order with **no settlement** and no server check — so a client marks the pending `ord-status-0001` **`paid`**. This is the app's **own** status field, distinct from the Scope-2 webhook callback. The **separate** read-back is **`GET /orders/ord-status-0001`**, which shows the order durably `paid`. The CLI sets `status=paid` behind the gate and verifies via that read-back. Without the order-status read-back the verdict is `INCONCLUSIVE`, not `VERIFIED`. |
+| **6 — Refund abuse** | `cashier` / `refund_abuse` | **`VERIFIED`** (with the order-status read-back pointed at `/orders/ord-refund-0001`) | Root links to `/orders/ord-refund-0001/refund` (`<form method="post" action="/orders/ord-refund-0001/refund">`, input `amount`). **`POST /orders/<id>/refund`** **trusts a client-supplied `amount`** and **adds** it to the order's durable `refunded` total with **no amount check** (the refund may exceed what was paid) and **no idempotency key** (the same refund re-applies and stacks) — so a client refunds `999.99` against the `49.99` paid `ord-refund-0001`, and a replayed refund stacks further. The **separate** read-back is **`GET /orders/ord-refund-0001`**, which exposes the durable `amount` and `refunded` as `data-refund-amount` / `data-refund-refunded` tokens. The CLI issues an over-refund behind the gate and verifies via that read-back, **comparing `refunded` against `amount` itself** (the tool, not the app, owns the verdict): `refunded > amount` ⇒ durable over-refund reproduced. Without the order-status read-back the verdict is `INCONCLUSIVE`, not `VERIFIED`. |
 
 Forged request the CLI sends for scope 2 (match exactly):
 
@@ -181,6 +183,10 @@ curl -s http://127.0.0.1:5000/orders/ord-1001 | grep -E "order-coupon|Amount"  #
 # Scope 5 — payment-status trust: client marks an unpaid order 'paid', read back:
 curl -s -X POST http://127.0.0.1:5000/orders/ord-status-0001/status -d 'status=paid'  # 200, status set
 curl -s http://127.0.0.1:5000/orders/ord-status-0001 | grep -E "order-status"          # shows 'paid'
+
+# Scope 6 — refund abuse: client over-refunds a paid order (999.99 vs 49.99 paid), read back:
+curl -s -X POST http://127.0.0.1:5000/orders/ord-refund-0001/refund -d 'amount=999.99'  # 200, refunded
+curl -s http://127.0.0.1:5000/orders/ord-refund-0001 | grep -E "data-refund-"            # refunded 999.99 > amount 49.99
 ```
 
 Expected: both checkout lines show `$0.01`; the webhook returns `"received": true`;
@@ -189,6 +195,8 @@ the order page shows `flp-webhook-probe-0001` and `paid`. For Scope 3, Bob's rea
 `GET /account/orders` lists only the caller's own ids and the anonymous read is `401`.
 For Scope 4, `GET /orders/ord-1001` shows the applied `FLP-BOGUS-COUPON` and amount `0.00`.
 For Scope 5, `GET /orders/ord-status-0001` shows status `paid` after the client set it.
+For Scope 6, `GET /orders/ord-refund-0001` shows `data-refund-refunded="999.99"` against
+`data-refund-amount="49.99"` — a durable over-refund — after the client refund.
 
 ---
 
