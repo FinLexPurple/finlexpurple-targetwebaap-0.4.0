@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Order {{ order['id'] }} — set status{% endblock %}
+{% block content %}
+<section class="panel narrow">
+  <h2>Update order status</h2>
+  <dl class="kv">
+    <dt>Order id</dt><dd>{{ order['id'] }}</dd>
+    <dt>Current status</dt><dd>{{ order['status'] }}</dd>
+    <dt>Amount</dt><dd>${{ order['amount'] }}</dd>
+  </dl>
+  <form method="post" action="/orders/{{ order['id'] }}/status">
+    <label>Status <input name="status" placeholder="e.g. paid"></label>
+    <button type="submit">Set status</button>
+  </form>
+  {% if applied %}<p class="note">Status updated for order {{ order['id'] }}.</p>{% endif %}
+</section>
+{% endblock %}
