@@ -42,6 +42,10 @@ app.secret_key = "flp-0.4.0-demo-secret"
 # bare-GET read-back always reads the same durable row.
 CART_ORDER_ID = "ord-1001"
 
+# The dedicated paid order the refund endpoint (Scope 6) refunds. Deterministic id
+# so the refund-status read-back always reads the same durable row.
+REFUND_ORDER_ID = "ord-refund-0001"
+
 
 # --- Database helpers ------------------------------------------------------
 def get_db():
@@ -84,7 +88,11 @@ def init_db():
             owner TEXT,
             -- Scope 4 (coupon_abuse): the client-supplied coupon code applied to
             -- the cart, trusted and persisted here; NULL until one is applied.
-            coupon TEXT
+            coupon TEXT,
+            -- Scope 6 (refund_abuse): the order's durable refunded total. The refund
+            -- endpoint ADDS the client amount here with no amount/idempotency check,
+            -- so it can grow past `amount` (an over-refund). Defaults to 0.00.
+            refunded TEXT NOT NULL DEFAULT '0.00'
         );
 
         CREATE TABLE users (
@@ -120,6 +128,9 @@ def init_db():
             # Scope 5 (payment_status_trust): a dedicated order whose status the
             # client can set directly (no settlement), separate from the cart.
             ("ord-status-0001", "FLP-PRO-12M", "49.99", "pending", None),
+            # Scope 6 (refund_abuse): a dedicated PAID order (refunded 0.00 by the
+            # column default) the refund endpoint can over-refund past its amount.
+            ("ord-refund-0001", "FLP-PRO-12M", "49.99", "paid", None),
         ],
     )
     db.executemany(
@@ -271,6 +282,40 @@ def order_set_status(order_id):
             return jsonify({"updated": True, "order_id": order_id, "status": status}), 200
         order = get_order(order_id)
     return render_template("status.html", order=order, applied=applied)
+
+
+@app.route("/orders/<order_id>/refund", methods=["GET", "POST"])
+def order_refund(order_id):
+    # SCOPE 6 (refund_abuse): the refund endpoint TRUSTS a client-supplied `amount`
+    # and ADDS it to the order's durable `refunded` total with NO amount check (the
+    # refund may exceed what was paid) and NO idempotency key (the same refund
+    # re-applies and stacks). So a client can refund more than the amount paid, and
+    # a replayed refund stacks further. GET shows a real <form> so a crawler
+    # discovers POST /orders/<id>/refund with input name `amount`. The durable
+    # effect (refunded > amount) is read back via GET /orders/<id>.
+    db = get_db()
+    order = get_order(order_id)
+    if order is None:
+        abort(404)
+    amount = request.values.get("amount")
+    applied = amount is not None and amount != ""
+    if applied:
+        try:
+            new_refunded = float(order["refunded"]) + float(amount)
+            db.execute(
+                "UPDATE orders SET refunded = ? WHERE id = ?",
+                (f"{new_refunded:.2f}", order_id),
+            )
+            db.commit()
+        except (TypeError, ValueError):
+            pass  # non-numeric refund amount: ignore, keep the durable value
+        order = get_order(order_id)
+        if request.method == "POST":
+            return jsonify({
+                "refunded": True, "order_id": order_id,
+                "amount": amount, "refunded_total": order["refunded"],
+            }), 200
+    return render_template("refund.html", order=order, applied=applied)
 
 
 # --- Scope 3 (order_idor): authenticated account orders --------------------
