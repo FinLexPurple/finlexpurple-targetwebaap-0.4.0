@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Order {{ order['id'] }} — refund{% endblock %}
+{% block content %}
+<section class="panel narrow">
+  <h2>Issue a refund</h2>
+  <dl class="kv">
+    <dt>Order id</dt><dd>{{ order['id'] }}</dd>
+    <dt>Amount paid</dt><dd>${{ order['amount'] }}</dd>
+    <dt>Refunded so far</dt><dd>${{ order['refunded'] }}</dd>
+  </dl>
+  <form method="post" action="/orders/{{ order['id'] }}/refund">
+    <label>Refund amount <input name="amount" placeholder="e.g. 49.99"></label>
+    <button type="submit">Refund</button>
+  </form>
+  {% if applied %}<p class="note">Refund applied to order {{ order['id'] }}.</p>{% endif %}
+</section>
+{% endblock %}
