@@ -91,6 +91,7 @@ Optional environment overrides (defaults keep it on localhost):
 | `orders`   | `ord-bob-0001` — owner `bob`, amount `49.99`, status `paid` (Scope 3) |
 | `orders`   | `ord-status-0001` — no owner, amount `49.99`, status `pending` (Scope 5) |
 | `orders`   | `ord-refund-0001` — no owner, amount `49.99`, status `paid`, refunded `0.00` (Scope 6) |
+| `orders`   | `ord-voucher-0001` — no owner, single-use voucher, `voucher_value` `20.00`, `applied_count` `0`, `credit` `0.00` (Scope 7) |
 | `users`    | `alice`, `bob` — the two seeded account logins (Scope 3) |
 
 `webhook_events` starts empty. No order `flp-webhook-probe-0001` exists until a
@@ -112,6 +113,7 @@ exposed as a real `<form>` whose `action` and input names the crawler can read.
 | **4 — Coupon abuse** | `cashier` / `coupon_abuse` | **`VERIFIED`** (with the order-status read-back pointed at `/orders/ord-1001`) | Root links to `/cart/coupon` (`<form method="post" action="/cart/coupon">`, input `code`). **`POST /cart/coupon`** **trusts any client-supplied coupon code** it never issued: it returns **HTTP 200**, drops the cart order `ord-1001` total to `0.00`, and **persists the code** on the order. The **separate** read-back is **`GET /orders/ord-1001`**, which shows the applied `coupon`. The CLI applies a distinctive bogus code behind the gate and verifies via that read-back: the bogus code recorded on the persisted order ⇒ illegitimate discount reproduced. Without the order-status read-back the verdict is `INCONCLUSIVE`, not `VERIFIED`. |
 | **5 — Payment-status trust** | `cashier` / `payment_status_trust` | **`VERIFIED`** (with the order-status read-back pointed at `/orders/ord-status-0001`) | Root links to `/orders/ord-status-0001/status` (`<form method="post" action="/orders/ord-status-0001/status">`, input `status`). **`POST /orders/<id>/status`** **trusts a client-supplied `status`** and persists it to the order with **no settlement** and no server check — so a client marks the pending `ord-status-0001` **`paid`**. This is the app's **own** status field, distinct from the Scope-2 webhook callback. The **separate** read-back is **`GET /orders/ord-status-0001`**, which shows the order durably `paid`. The CLI sets `status=paid` behind the gate and verifies via that read-back. Without the order-status read-back the verdict is `INCONCLUSIVE`, not `VERIFIED`. |
 | **6 — Refund abuse** | `cashier` / `refund_abuse` | **`VERIFIED`** (with the order-status read-back pointed at `/orders/ord-refund-0001`) | Root links to `/orders/ord-refund-0001/refund` (`<form method="post" action="/orders/ord-refund-0001/refund">`, input `amount`). **`POST /orders/<id>/refund`** **trusts a client-supplied `amount`** and **adds** it to the order's durable `refunded` total with **no amount check** (the refund may exceed what was paid) and **no idempotency key** (the same refund re-applies and stacks) — so a client refunds `999.99` against the `49.99` paid `ord-refund-0001`, and a replayed refund stacks further. The **separate** read-back is **`GET /orders/ord-refund-0001`**, which exposes the durable `amount` and `refunded` as `data-refund-amount` / `data-refund-refunded` tokens. The CLI issues an over-refund behind the gate and verifies via that read-back, **comparing `refunded` against `amount` itself** (the tool, not the app, owns the verdict): `refunded > amount` ⇒ durable over-refund reproduced. Without the order-status read-back the verdict is `INCONCLUSIVE`, not `VERIFIED`. |
+| **7 — Race condition** | `cashier` / `race_condition` | **`INCONCLUSIVE`** (expected — a human-review lead; **never a forced `VERIFIED`**) | Root links to `/orders/ord-voucher-0001/redeem` (`<form method="post" action="/orders/ord-voucher-0001/redeem">`). **`POST /orders/<id>/redeem`** redeems a **single-use** store-credit voucher behind a **check-then-act** guard: it reads `applied_count` and, only while it is `0`, grants `voucher_value` and increments the count. **Sequentially this is single-use** — a second redeem returns **409**. But the check and the act are **not atomic** and there is **no lock or idempotency key**, so two **concurrent** redeems can both read `applied_count==0`, both pass the guard, and both grant credit (`applied_count` → `2`). The **separate** read-back is **`GET /orders/ord-voucher-0001`**, which exposes `applied_count` as the `data-race-applied` token. The CLI runs a **bounded, gated, rate-limited** concurrent burst and verifies via that read-back, **owning the verdict itself** (`applied_count >= 2` ⇒ double-processing). A genuine race is **non-deterministic** (and the single-threaded dev server usually serializes the burst), so the honest verdict is **`INCONCLUSIVE`** — a lead a human must pursue, **not** evidence the race is absent and **not** an auto-`VERIFIED`. The code-level check-then-act flaw is real regardless. |
 
 Forged request the CLI sends for scope 2 (match exactly):
 
@@ -187,6 +189,14 @@ curl -s http://127.0.0.1:5000/orders/ord-status-0001 | grep -E "order-status"   
 # Scope 6 — refund abuse: client over-refunds a paid order (999.99 vs 49.99 paid), read back:
 curl -s -X POST http://127.0.0.1:5000/orders/ord-refund-0001/refund -d 'amount=999.99'  # 200, refunded
 curl -s http://127.0.0.1:5000/orders/ord-refund-0001 | grep -E "data-refund-"            # refunded 999.99 > amount 49.99
+
+# Scope 7 — race condition: single-use voucher is guarded SEQUENTIALLY; a second
+# redeem is rejected, so a sequential check reads applied_count 1 (NOT a double-spend).
+# Double-processing requires true concurrency (and usually the dev server serializes it),
+# which is why the scanner's honest verdict is INCONCLUSIVE, not VERIFIED:
+curl -s -X POST http://127.0.0.1:5000/orders/ord-voucher-0001/redeem                      # 200, redeemed (applied_count 1)
+curl -s -X POST http://127.0.0.1:5000/orders/ord-voucher-0001/redeem                      # 409, already redeemed
+curl -s http://127.0.0.1:5000/orders/ord-voucher-0001 | grep -E "data-race-applied"       # applied_count 1 (single-use held)
 ```
 
 Expected: both checkout lines show `$0.01`; the webhook returns `"received": true`;
@@ -197,6 +207,11 @@ For Scope 4, `GET /orders/ord-1001` shows the applied `FLP-BOGUS-COUPON` and amo
 For Scope 5, `GET /orders/ord-status-0001` shows status `paid` after the client set it.
 For Scope 6, `GET /orders/ord-refund-0001` shows `data-refund-refunded="999.99"` against
 `data-refund-amount="49.99"` — a durable over-refund — after the client refund.
+For Scope 7, a **sequential** redeem then a second redeem returns `409`, so
+`GET /orders/ord-voucher-0001` shows `data-race-applied="1"` — the single-use guard held.
+Double-processing (`applied_count >= 2`) only occurs under true concurrency and is
+non-deterministic, so the scanner honestly reports `INCONCLUSIVE` (a human-review lead),
+never a forced `VERIFIED`.
 
 ---
 
