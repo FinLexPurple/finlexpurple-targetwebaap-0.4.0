@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Voucher {{ order['id'] }} — redeem{% endblock %}
+{% block content %}
+<section class="panel narrow">
+  <h2>Redeem store-credit voucher</h2>
+  <dl class="kv">
+    <dt>Voucher id</dt><dd>{{ order['id'] }}</dd>
+    <dt>Voucher value</dt><dd>${{ order['voucher_value'] }}</dd>
+    <dt>Times redeemed</dt><dd>{{ order['applied_count'] }}</dd>
+    <dt>Store credit granted</dt><dd>${{ order['credit'] }}</dd>
+  </dl>
+  <p class="note">Single-use: this voucher may be redeemed once.</p>
+  <form method="post" action="/orders/{{ order['id'] }}/redeem">
+    <button type="submit">Redeem</button>
+  </form>
+</section>
+{% endblock %}

@@ -46,6 +46,10 @@ CART_ORDER_ID = "ord-1001"
 # so the refund-status read-back always reads the same durable row.
 REFUND_ORDER_ID = "ord-refund-0001"
 
+# The dedicated single-use store-credit voucher the redeem endpoint (Scope 7) acts on.
+# Deterministic id so the double-processing read-back always reads the same durable row.
+RACE_ORDER_ID = "ord-voucher-0001"
+
 
 # --- Database helpers ------------------------------------------------------
 def get_db():
@@ -92,7 +96,15 @@ def init_db():
             -- Scope 6 (refund_abuse): the order's durable refunded total. The refund
             -- endpoint ADDS the client amount here with no amount/idempotency check,
             -- so it can grow past `amount` (an over-refund). Defaults to 0.00.
-            refunded TEXT NOT NULL DEFAULT '0.00'
+            refunded TEXT NOT NULL DEFAULT '0.00',
+            -- Scope 7 (race_condition): a single-use store-credit voucher. `voucher_value`
+            -- is the credit the voucher grants; `applied_count` is how many times it was
+            -- durably redeemed (guarded to 1 sequentially, but a check-then-act race can
+            -- push it to >=2); `credit` is the total store credit granted. Non-voucher
+            -- orders keep the column defaults.
+            voucher_value TEXT NOT NULL DEFAULT '0.00',
+            applied_count INTEGER NOT NULL DEFAULT 0,
+            credit TEXT NOT NULL DEFAULT '0.00'
         );
 
         CREATE TABLE users (
@@ -132,6 +144,13 @@ def init_db():
             # column default) the refund endpoint can over-refund past its amount.
             ("ord-refund-0001", "FLP-PRO-12M", "49.99", "paid", None),
         ],
+    )
+    # Scope 7 (race_condition): a dedicated single-use store-credit voucher worth
+    # 20.00, un-redeemed (applied_count 0, credit 0.00 by the column defaults). The
+    # redeem endpoint's check-then-act guard can be bypassed by concurrent requests.
+    db.execute(
+        "INSERT INTO orders (id, sku, amount, status, owner, voucher_value) VALUES (?,?,?,?,?,?)",
+        (RACE_ORDER_ID, "FLP-PRO-12M", "0.00", "voucher", None, "20.00"),
     )
     db.executemany(
         "INSERT INTO users (username) VALUES (?)",
@@ -316,6 +335,48 @@ def order_refund(order_id):
                 "amount": amount, "refunded_total": order["refunded"],
             }), 200
     return render_template("refund.html", order=order, applied=applied)
+
+
+@app.route("/orders/<order_id>/redeem", methods=["GET", "POST"])
+def order_redeem(order_id):
+    # SCOPE 7 (race_condition): a SINGLE-USE store-credit voucher. The redeem endpoint
+    # GUARDS redemption with a check-then-act: it reads `applied_count`, and only while
+    # it is 0 does it grant the voucher's credit and increment the count. SEQUENTIALLY
+    # this is single-use — a second redeem is rejected (409). But the check and the act
+    # are NOT atomic and there is NO lock or idempotency key, so two CONCURRENT redeems
+    # can both read applied_count==0, both pass the guard, and both grant credit —
+    # a double-processing race (applied_count -> 2, credit granted twice).
+    #
+    # This is a GENUINE race: whether it double-processes is non-deterministic and
+    # depends on request interleaving (and the server's threading), so a scanner's
+    # honest verdict is usually INCONCLUSIVE — a human-review lead, never a forced
+    # VERIFIED. The flaw is real in the code regardless. GET shows a real <form> so a
+    # crawler discovers POST /orders/<id>/redeem. The durable effect (applied_count >= 2)
+    # is read back via GET /orders/<id> as the data-race-applied token.
+    db = get_db()
+    order = get_order(order_id)
+    if order is None:
+        abort(404)
+    if request.method == "POST":
+        applied = int(order["applied_count"])
+        if applied >= 1:
+            return jsonify({
+                "redeemed": False, "order_id": order_id, "reason": "already redeemed",
+            }), 409
+        # Check-then-act window: a safe app would guard atomically here (a UNIQUE
+        # constraint, SELECT ... FOR UPDATE, or an idempotency key). This one does not.
+        new_credit = float(order["credit"]) + float(order["voucher_value"])
+        db.execute(
+            "UPDATE orders SET applied_count = applied_count + 1, credit = ? WHERE id = ?",
+            (f"{new_credit:.2f}", order_id),
+        )
+        db.commit()
+        order = get_order(order_id)
+        return jsonify({
+            "redeemed": True, "order_id": order_id,
+            "credit": order["credit"], "applied_count": order["applied_count"],
+        }), 200
+    return render_template("redeem.html", order=order)
 
 
 # --- Scope 3 (order_idor): authenticated account orders --------------------

@@ -15,6 +15,11 @@
        amount paid (refunded > amount == a durable over-refund). #}
     <dt>Refunded</dt>
     <dd><span data-refund-refunded="{{ order['refunded'] }}">${{ order['refunded'] }}</span></dd>
+    {# Scope 7 (race_condition) read-back: how many times the single-use voucher was
+       durably redeemed, exposed as a machine-readable token so the in-scope confirmer
+       can detect double-processing (applied_count >= 2 == the check-then-act race fired). #}
+    <dt>Redeemed</dt>
+    <dd><span data-race-applied="{{ order['applied_count'] }}">{{ order['applied_count'] }}×</span></dd>
   </dl>
 </section>
 {% endblock %}
